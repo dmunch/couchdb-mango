@@ -163,8 +163,16 @@ norm_ops({[{<<"$gt">>, _}]} = Cond) ->
 % Known but unsupported operators
 norm_ops({[{<<"$where">>, _}]}) ->
     ?MANGO_ERROR({not_supported, '$where'});
-norm_ops({[{<<"$geoWithin">>, _}]}) ->
-    ?MANGO_ERROR({not_supported, '$geoWithin'});
+
+norm_ops({[{<<"$geoWithin">>, Arg}]}) ->
+    {[{<<"$geometry">>, {[{<<"type">>, Type}, {<<"coordinates">>, Coordinates}]}}]} = Arg,
+    {ok, Geom} = erlgeom:to_geom({binary_to_atom(Type, latin1), Coordinates}),
+    {ok, PreparedGeom} = erlgeom:prepare(Geom),
+    {[{<<"$geoWithin_prepared">>, PreparedGeom}]};
+
+norm_ops({[{<<"$geoWithin_prepared">>, _}]} = Cond) ->
+    Cond;
+
 norm_ops({[{<<"$geoIntersects">>, _}]}) ->
     ?MANGO_ERROR({not_supported, '$geoIntersects'});
 norm_ops({[{<<"$near">>, _}]}) ->
@@ -509,6 +517,32 @@ match({[{<<"$size">>, _}]}, _Value, _Cmp) ->
 % index returned valid matches
 match({[{<<"$default">>, _}]}, _Value, _Cmp) ->
     true;
+
+
+match({[{<<"$geoWithin_prepared">>, PreparedGeom}]}, _Value, _Cmp) ->
+    {[{<<"type">>, TypeValue}, {<<"coordinates">>, CoordinatesValue}]} = _Value,
+    {ok, GeomValue} = erlgeom:to_geom({binary_to_atom(TypeValue, latin1), CoordinatesValue}),
+   
+    case erlgeom:prepared_contains(PreparedGeom, GeomValue) of
+        true -> true;
+        false -> false;
+        error -> false
+    end;
+
+%This op is never used since the query is prepared in the norm_ops step
+%It's kept here for future reference in case we don't want to prepare geometries for queries 
+match({[{<<"$geoWithin">>, Geom}]}, _Value, _Cmp) ->
+    {[{<<"$geometry">>, {[{<<"type">>, Type}, {<<"coordinates">>, Coordinates}]}}]} = Geom,
+    {[{<<"type">>, TypeValue}, {<<"coordinates">>, CoordinatesValue}]} = _Value,
+   
+    {ok, Geom} = erlgeom:to_geom({binary_to_atom(Type, latin1), Coordinates}),
+    {ok, GeomValue} = erlgeom:to_geom({binary_to_atom(TypeValue, latin1), CoordinatesValue}),
+    
+    case erlgeom:contains(GeomValue, Geom) of
+        true -> true;
+        false -> false;
+        error -> false
+    end;
 
 % All other operators are internal assertion errors for
 % matching because we either should've removed them during
